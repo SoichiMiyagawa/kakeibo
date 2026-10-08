@@ -94,10 +94,13 @@
           <label>支払回数<select name="count"></select></label>
           <label>初回支払月<input name="startMonth" type="month" required></label>
           <input type="hidden" name="expenseId">
+          <input type="hidden" name="planId">
         </form>
         <div id="simResult"></div>
         <div class="actions">
           <button id="registerPlan" type="button">この内容で家計簿に登録</button>
+          <button id="cancelPlanEdit" type="button" class="secondary hidden">編集をやめる</button>
+          <button id="unsplitPlan" type="button" class="secondary hidden">分割を解除</button>
         </div>
         <details>
           <summary>回数別の比較</summary>

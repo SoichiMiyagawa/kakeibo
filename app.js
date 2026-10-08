@@ -195,9 +195,8 @@ function renderMonth() {
   const exps = [...s.expenses].sort((a, b) => b.date.localeCompare(a.date) || b.u - a.u);
   $('#expenseList').innerHTML = exps.map(x => {
     const split = x.splitId ? ' split' : '';
-    const splitBtn = x.splitId
-      ? '<span class="auto">分割済</span>'
-      : `<button class="row-btn" data-split="${x.id}">分割</button>`;
+    // 分割済みでもボタンは残し、押すと分割内容の編集になる
+    const splitBtn = `<button class="row-btn${x.splitId ? ' on' : ''}" data-split="${x.id}">分割</button>`;
     return `<li class="${split}"><div class="main">${esc(x.category)}${x.memo ? '：' + esc(x.memo) : ''}<small>${Number(x.date.slice(5, 7))}/${Number(x.date.slice(8))}</small></div>
       <span class="amt">${yen(x.amount)}</span>${splitBtn}
       <button class="row-btn" data-edit-expense="${x.id}">編集</button><button class="row-btn" data-del="expenses:${x.id}">×</button></li>`;
@@ -246,7 +245,7 @@ function renderPlans() {
     const last = sc.rows[sc.rows.length - 1].month;
     const part = sc.lump ? `${yen(sc.total)}のうち${yen(p.amount)}` : yen(p.amount);
     return `<li><div class="main">${esc(p.name || '分割払い')}<small>${part} / ${p.count}回 / ${monthLabel(p.startMonth)}〜${monthLabel(last)}</small></div>
-      <span class="amt">月${yen(sc.monthly)}</span><button class="row-btn" data-del="plans:${p.id}">×</button></li>`;
+      <span class="amt">月${yen(sc.monthly)}</span><button class="row-btn" data-edit-plan="${p.id}">編集</button><button class="row-btn" data-del="plans:${p.id}">×</button></li>`;
   }).join('') || '<li class="empty">まだありません</li>';
 }
 
@@ -260,7 +259,36 @@ function simInput() {
     count: Number(f.count.value),
     startMonth: f.startMonth.value,
     expenseId: f.expenseId.value,
+    planId: f.planId.value,
   };
+}
+
+// 分割フォームを新規入力／既存の分割の編集モードにする
+function setPlanEditing(planId) {
+  $('#simForm').planId.value = planId || '';
+  $('#registerPlan').textContent = planId ? '分割内容を更新' : 'この内容で家計簿に登録';
+  $('#cancelPlanEdit').classList.toggle('hidden', !planId);
+  $('#unsplitPlan').classList.toggle('hidden', !planId);
+}
+
+function loadPlanIntoSim(p) {
+  const f = $('#simForm');
+  const total = p.total ?? p.amount;
+  f.name.value = p.name || '';
+  f.amount.value = total;
+  f.splitAmount.value = p.amount === total ? '' : p.amount;
+  f.count.value = String(p.count);
+  f.startMonth.value = p.startMonth;
+  f.expenseId.value = p.expenseId || '';
+  setPlanEditing(p.id);
+  showTab('split');
+  renderSim();
+}
+
+function resetSim() {
+  clearFields($('#simForm'), ['count', 'startMonth']);
+  setPlanEditing(null);
+  renderSim();
 }
 
 function renderSim() {
@@ -295,7 +323,10 @@ function renderSim() {
       ${sc.rows.map(r => {
         // 支出から分割に切り替える場合、元の支出は差し引かれなくなる
         const src = inp.expenseId && expenseById(inp.expenseId);
-        const back = src && !src.splitId && monthOf(src.date) === r.month ? src.amount : 0;
+        let back = src && !src.splitId && monthOf(src.date) === r.month ? src.amount : 0;
+        // 編集中の分割は、今の登録内容の支払いを差し戻してから比べる
+        const old = inp.planId && data.plans.find(p => p.id === inp.planId);
+        if (old) back += planSchedule(old).rows.find(o => o.month === r.month)?.amount || 0;
         const after = monthSummary(r.month).balance + back - r.amount;
         return `<tr><td>${r.n}</td><td>${monthLabel(r.month)}</td><td>${yen(r.amount)}</td><td class="${after < 0 ? 'neg' : ''}">${yen(after)}</td></tr>`;
       }).join('')}
@@ -352,7 +383,14 @@ function initForms() {
   exp.date.value = defaultDate();
   setupForm(exp, id => {
     const old = expenseById(id);
-    upsert('expenses', { ...(old || {}), id, date: exp.date.value, category: exp.category.value, memo: exp.memo.value.trim(), amount: Math.floor(Number(exp.amount.value)) });
+    const amount = Math.floor(Number(exp.amount.value));
+    upsert('expenses', { ...(old || {}), id, date: exp.date.value, category: exp.category.value, memo: exp.memo.value.trim(), amount });
+    // 分割済みの支出の金額を変えたら、分割の利用金額も合わせる
+    const plan = old && old.splitId && data.plans.find(p => p.id === old.splitId);
+    if (plan && (plan.total ?? plan.amount) !== amount) {
+      const keepAll = plan.amount === (plan.total ?? plan.amount);
+      upsert('plans', { ...plan, total: amount, amount: keepAll ? amount : Math.min(plan.amount, amount) });
+    }
     clearFields(exp, ['date', 'category']);
     if (monthOf(exp.date.value) !== currentMonth) toast(`${monthLabel(monthOf(exp.date.value))}に記録しました`);
   });
@@ -367,15 +405,21 @@ function initForms() {
   $('#simForm').addEventListener('input', renderSim);
   $('#registerPlan').addEventListener('click', () => {
     const inp = simInput();
-    const id = uid();
+    const editing = !!(inp.planId && data.plans.some(p => p.id === inp.planId));
+    const id = editing ? inp.planId : uid();
     upsert('plans', { id, name: inp.name, total: inp.total, amount: inp.amount, count: inp.count, startMonth: inp.startMonth, expenseId: inp.expenseId || undefined });
     if (inp.expenseId) {
       const x = expenseById(inp.expenseId);
-      if (x) upsert('expenses', { ...x, splitId: id });
+      if (x && x.splitId !== id) upsert('expenses', { ...x, splitId: id });
     }
-    clearFields($('#simForm'), ['count', 'startMonth']);
-    toast('分割払いを登録しました');
-    render();
+    resetSim();
+    toast(editing ? '分割内容を更新しました' : '分割払いを登録しました');
+  });
+  $('#cancelPlanEdit').addEventListener('click', resetSim);
+  $('#unsplitPlan').addEventListener('click', () => {
+    const id = $('#simForm').planId.value;
+    resetSim();
+    deleteWithUndo('plans', id);
   });
 
   // 一覧のボタン（委譲）
@@ -397,13 +441,19 @@ function initForms() {
       sh.date.value = x.date; sh.hours.value = x.hours; sh.wage.value = x.wage; sh.beginEdit(x.id);
     } else if (d.split) {
       const x = expenseById(d.split);
+      const plan = x.splitId && data.plans.find(p => p.id === x.splitId);
+      if (plan) { loadPlanIntoSim(plan); return; }
       const f = $('#simForm');
       f.name.value = `${x.category}${x.memo ? '：' + x.memo : ''}`;
       f.amount.value = x.amount;
+      f.splitAmount.value = '';
       f.startMonth.value = addMonths(monthOf(x.date), 1);
       f.expenseId.value = x.id;
+      setPlanEditing(null);
       showTab('split');
       renderSim();
+    } else if (d.editPlan) {
+      loadPlanIntoSim(data.plans.find(p => p.id === d.editPlan));
     } else if (d.tab) {
       showTab(d.tab);
     }

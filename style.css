@@ -79,6 +79,7 @@ main { max-width: 720px; margin: 0 auto; padding: 12px 16px; }
 .list .amt { font-variant-numeric: tabular-nums; white-space: nowrap; }
 .list .auto { color: var(--muted); font-size: 12px; }
 .list li.split .amt { text-decoration: line-through; color: var(--muted); }
+.row-btn.on { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
 .list .empty { color: var(--muted); font-size: 14px; justify-content: center; }
 .row-btn {
   background: none; border: 1px solid var(--line); color: var(--muted);
