@@ -86,10 +86,11 @@
     <section id="tab-split" class="tab">
       <div class="card">
         <h2>あとから分割シミュレーション</h2>
-        <p class="note">三井住友カード（2025年4月改定後の手数料）。手数料＝利用額×(100円あたり手数料÷100)。月々の端数は初回に加算。</p>
+        <p class="note">三井住友カード。手数料はポイントで戻るため0円で計算します。月々の端数は初回に加算、分割に回さない分は初回の月に1回払いになります。</p>
         <form id="simForm" class="sim">
           <label>品名<input name="name" placeholder="例：ノートPC"></label>
           <label>利用金額<input name="amount" type="number" inputmode="numeric" min="1" required></label>
+          <label>分割に回す金額<input name="splitAmount" type="number" inputmode="numeric" min="1" placeholder="未入力なら全額"></label>
           <label>支払回数<select name="count"></select></label>
           <label>初回支払月<input name="startMonth" type="month" required></label>
           <input type="hidden" name="expenseId">

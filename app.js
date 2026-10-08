@@ -1,17 +1,8 @@
 'use strict';
 
 // ---------- 定数 ----------
-// 三井住友カード 分割払い手数料（2025年4月1日改定後）: 100円あたりの手数料
-const SMBC_FEES = {
-  3: 2.46, 4: 3.28, 5: 4.10, 6: 4.92, 10: 8.20, 12: 9.84, 15: 12.30, 18: 14.76,
-  20: 16.40, 24: 19.68, 30: 24.60, 36: 29.52, 40: 32.80, 42: 34.44, 48: 39.36,
-  50: 41.00, 54: 44.28, 60: 49.20,
-};
-const SMBC_APR = {
-  3: 14.70, 4: 15.64, 5: 16.25, 6: 16.68, 10: 17.51, 12: 17.69, 15: 17.84, 18: 17.90,
-  20: 17.91, 24: 17.88, 30: 17.79, 36: 17.65, 40: 17.55, 42: 17.50, 48: 17.35,
-  50: 17.29, 54: 17.19, 60: 17.03,
-};
+// 三井住友カード「あとから分割」で選べる回数（学生は手数料がポイント還元されるので手数料0で計算）
+const SPLIT_COUNTS = [3, 4, 5, 6, 10, 12, 15, 18, 20, 24, 30, 36, 40, 42, 48, 50, 54, 60];
 const DEFAULT_CATEGORIES = ['食費', '日用品', '交通費', '交際費', '趣味', '衣服', '通信費', '家賃', '光熱費', '学費・書籍', 'その他'];
 const LS_DATA = 'kakeibo.data';
 const LS_GH = 'kakeibo.github';
@@ -34,12 +25,19 @@ function addMonths(ym, k) {
 const monthLabel = ym => { const [y, m] = ym.split('-'); return `${y}年${Number(m)}月`; };
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
-function toast(msg) {
+// action を渡すと「元に戻す」などのボタン付きで表示する
+function toast(msg, action) {
   const t = $('#toast');
-  t.textContent = msg;
+  t.innerHTML = `<span>${esc(msg)}</span>`;
+  if (action) {
+    const b = document.createElement('button');
+    b.textContent = action.label;
+    b.addEventListener('click', () => { t.classList.remove('show'); action.fn(); });
+    t.append(b);
+  }
   t.classList.add('show');
   clearTimeout(toast.timer);
-  toast.timer = setTimeout(() => t.classList.remove('show'), 2500);
+  toast.timer = setTimeout(() => t.classList.remove('show'), action ? 5000 : 2500);
 }
 
 function lsGet(key, fallback) {
@@ -109,16 +107,18 @@ function merge(a, b) {
 }
 
 // ---------- 計算 ----------
+// total: 利用金額, amount: そのうち分割に回す金額（残りは初回の月に1回払い）
+// 月々の端数は初回に加算（三井住友カードの計算方法）
 function planSchedule(p) {
-  const fee = Math.floor(p.amount * p.feePer100 / 100);
-  const total = p.amount + fee;
-  const monthly = Math.floor(total / p.count);
-  const first = total - monthly * (p.count - 1);
+  const total = p.total ?? p.amount;
+  const lump = total - p.amount;
+  const monthly = Math.floor(p.amount / p.count);
+  const first = p.amount - monthly * (p.count - 1);
   const rows = [];
   for (let i = 0; i < p.count; i++) {
-    rows.push({ n: i + 1, month: addMonths(p.startMonth, i), amount: i === 0 ? first : monthly });
+    rows.push({ n: i + 1, month: addMonths(p.startMonth, i), amount: i === 0 ? first + lump : monthly });
   }
-  return { fee, total, monthly, first, rows };
+  return { total, lump, monthly, first, rows };
 }
 
 function shiftPay(s) { return s.hours * s.wage; }
@@ -220,7 +220,7 @@ function renderMonth() {
   // 分割払い
   $('#planPaymentsCard').classList.toggle('hidden', !s.planPays.length);
   $('#planPaymentList').innerHTML = s.planPays.map(p =>
-    `<li><div class="main">${esc(p.plan.name || '分割払い')}<small>${p.n}/${p.plan.count}回目</small></div><span class="amt">${yen(p.amount)}</span></li>`).join('');
+    `<li><div class="main">${esc(p.plan.name || '分割払い')}<small>${p.n}/${p.plan.count}回目${p.n === 1 && planSchedule(p.plan).lump ? `（1回払い分 ${yen(planSchedule(p.plan).lump)} を含む）` : ''}</small></div><span class="amt">${yen(p.amount)}</span></li>`).join('');
 }
 
 function renderWork() {
@@ -244,7 +244,8 @@ function renderPlans() {
   $('#planList').innerHTML = plans.map(p => {
     const sc = planSchedule(p);
     const last = sc.rows[sc.rows.length - 1].month;
-    return `<li><div class="main">${esc(p.name || '分割払い')}<small>${yen(p.amount)} / ${p.count}回 / ${monthLabel(p.startMonth)}〜${monthLabel(last)} / 手数料${yen(sc.fee)}</small></div>
+    const part = sc.lump ? `${yen(sc.total)}のうち${yen(p.amount)}` : yen(p.amount);
+    return `<li><div class="main">${esc(p.name || '分割払い')}<small>${part} / ${p.count}回 / ${monthLabel(p.startMonth)}〜${monthLabel(last)}</small></div>
       <span class="amt">月${yen(sc.monthly)}</span><button class="row-btn" data-del="plans:${p.id}">×</button></li>`;
   }).join('') || '<li class="empty">まだありません</li>';
 }
@@ -253,7 +254,9 @@ function simInput() {
   const f = $('#simForm');
   return {
     name: f.name.value.trim(),
-    amount: Math.floor(Number(f.amount.value)),
+    total: Math.floor(Number(f.amount.value)),
+    // 未入力なら全額を分割
+    amount: f.splitAmount.value === '' ? Math.floor(Number(f.amount.value)) : Math.floor(Number(f.splitAmount.value)),
     count: Number(f.count.value),
     startMonth: f.startMonth.value,
     expenseId: f.expenseId.value,
@@ -263,26 +266,29 @@ function simInput() {
 function renderSim() {
   const f = $('#simForm');
   if (!f.count.options.length) {
-    f.count.innerHTML = Object.keys(SMBC_FEES).map(n => `<option value="${n}">${n}回（年率${SMBC_APR[n].toFixed(2)}%）</option>`).join('');
+    f.count.innerHTML = SPLIT_COUNTS.map(n => `<option value="${n}">${n}回</option>`).join('');
     f.count.value = '12';
   }
   if (!f.startMonth.value) f.startMonth.value = addMonths(monthOf(todayStr()), 1);
   const inp = simInput();
-  if (!inp.amount || inp.amount < 1 || !inp.startMonth) {
-    $('#simResult').innerHTML = '<p class="note">利用金額を入力すると結果が表示されます。</p>';
+  let msg = '';
+  if (!inp.total || inp.total < 1 || !inp.startMonth) msg = '利用金額を入力すると結果が表示されます。';
+  else if (!(inp.amount >= inp.count)) msg = `分割に回す金額は${inp.count}円以上にしてください。`;
+  else if (inp.amount > inp.total) msg = '分割に回す金額が利用金額を超えています。';
+  if (msg) {
+    $('#simResult').innerHTML = `<p class="note">${msg}</p>`;
     $('#simCompare').innerHTML = '';
     $('#registerPlan').disabled = true;
     return;
   }
   $('#registerPlan').disabled = false;
-  const p = { ...inp, feePer100: SMBC_FEES[inp.count] };
-  const sc = planSchedule(p);
+  const sc = planSchedule(inp);
   $('#simResult').innerHTML = `
     <div class="sim-head">
-      <div><small>手数料</small><b>${yen(sc.fee)}</b></div>
-      <div><small>支払総額</small><b>${yen(sc.total)}</b></div>
-      <div><small>月々（2回目以降）</small><b>${yen(sc.monthly)}</b></div>
-      <div><small>初回</small><b>${yen(sc.first)}</b></div>
+      <div><small>1回払い分（初回月）</small><b>${yen(sc.lump)}</b></div>
+      <div><small>分割分</small><b>${yen(inp.amount)}</b></div>
+      <div><small>初回の支払額</small><b>${yen(sc.rows[0].amount)}</b></div>
+      <div><small>2回目以降（月々）</small><b>${yen(sc.monthly)}</b></div>
     </div>
     <details><summary>支払スケジュール</summary><div class="table-wrap"><table>
       <tr><th>回</th><th>支払月</th><th>金額</th><th>その月の残金（登録後）</th></tr>
@@ -295,10 +301,10 @@ function renderSim() {
       }).join('')}
     </table></div></details>`;
   $('#simCompare').innerHTML = `<div class="table-wrap"><table>
-    <tr><th>回数</th><th>手数料</th><th>月々</th><th>総額</th></tr>
-    ${Object.keys(SMBC_FEES).map(n => {
-      const s = planSchedule({ amount: inp.amount, count: Number(n), feePer100: SMBC_FEES[n], startMonth: inp.startMonth });
-      return `<tr class="${Number(n) === inp.count ? 'hl' : ''}"><td>${n}回</td><td>${yen(s.fee)}</td><td>${yen(s.monthly)}</td><td>${yen(s.total)}</td></tr>`;
+    <tr><th>回数</th><th>初回</th><th>月々</th><th>最終支払月</th></tr>
+    ${SPLIT_COUNTS.filter(n => n <= inp.amount).map(n => {
+      const s = planSchedule({ ...inp, count: n });
+      return `<tr class="${n === inp.count ? 'hl' : ''}"><td>${n}回</td><td>${yen(s.rows[0].amount)}</td><td>${yen(s.monthly)}</td><td>${monthLabel(s.rows[n - 1].month)}</td></tr>`;
     }).join('')}
   </table></div>`;
 }
@@ -362,7 +368,7 @@ function initForms() {
   $('#registerPlan').addEventListener('click', () => {
     const inp = simInput();
     const id = uid();
-    upsert('plans', { id, name: inp.name, amount: inp.amount, count: inp.count, feePer100: SMBC_FEES[inp.count], startMonth: inp.startMonth, expenseId: inp.expenseId || undefined });
+    upsert('plans', { id, name: inp.name, total: inp.total, amount: inp.amount, count: inp.count, startMonth: inp.startMonth, expenseId: inp.expenseId || undefined });
     if (inp.expenseId) {
       const x = expenseById(inp.expenseId);
       if (x) upsert('expenses', { ...x, splitId: id });
@@ -379,18 +385,7 @@ function initForms() {
     const d = b.dataset;
     if (d.del) {
       const [coll, id] = d.del.split(':');
-      if (!confirm('削除しますか？')) return;
-      if (coll === 'plans') {
-        // 元の支出の「分割済」を解除
-        const p = data.plans.find(x => x.id === id);
-        const x = p && p.expenseId && expenseById(p.expenseId);
-        if (x) { const { splitId, ...rest } = x; upsert('expenses', rest); }
-      }
-      if (coll === 'expenses') {
-        const x = expenseById(id);
-        if (x && x.splitId && confirm('この支出に紐づく分割払いも削除しますか？（キャンセルで支出だけ削除）')) remove('plans', x.splitId);
-      }
-      remove(coll, id);
+      deleteWithUndo(coll, id);
     } else if (d.editIncome) {
       const x = data.incomes.find(i => i.id === d.editIncome);
       inc.name.value = x.name; inc.amount.value = x.amount; inc.beginEdit(x.id);
@@ -463,6 +458,35 @@ function initForms() {
       toast('読み込みに失敗しました');
     }
     e.target.value = '';
+  });
+}
+
+// 確認ダイアログ（confirm）は環境によって表示されず常にキャンセル扱いになるため、
+// すぐ削除して「元に戻す」を出す方式にしている
+function deleteWithUndo(coll, id) {
+  const item = data[coll].find(x => x.id === id);
+  if (!item) return;
+  const restore = [{ coll, item: structuredClone(item) }];
+  if (coll === 'plans' && item.expenseId) {
+    // 元の支出の「分割済」を解除
+    const x = expenseById(item.expenseId);
+    if (x) {
+      restore.push({ coll: 'expenses', item: structuredClone(x) });
+      const { splitId, ...rest } = x;
+      upsert('expenses', rest);
+    }
+  }
+  if (coll === 'expenses' && item.splitId) {
+    // 分割済みの支出なら紐づく分割払いも削除
+    const p = data.plans.find(x => x.id === item.splitId);
+    if (p) { restore.push({ coll: 'plans', item: structuredClone(p) }); remove('plans', p.id); }
+  }
+  remove(coll, id);
+  toast('削除しました', {
+    label: '元に戻す',
+    fn: () => {
+      for (const r of restore) { delete data.deleted[r.item.id]; upsert(r.coll, r.item); }
+    },
   });
 }
 
@@ -584,11 +608,11 @@ function initSync() {
     sync();
   });
   $('#ghForget').addEventListener('click', () => {
-    if (!confirm('この端末から同期設定（トークン）を削除しますか？家計簿データは残ります。')) return;
     gh = null;
     try { localStorage.removeItem(LS_GH); localStorage.removeItem(LS_SHA); } catch { /* noop */ }
     f.reset();
     setStatus('未設定');
+    toast('この端末の同期設定を削除しました（家計簿データは残っています）');
   });
   $('#syncStatus').addEventListener('click', () => (gh ? sync() : showTab('settings')));
   // アプリに戻ってきたとき最新を取得

@@ -138,5 +138,7 @@ summary { cursor: pointer; color: var(--muted); font-size: 14px; }
   position: fixed; left: 50%; bottom: calc(84px + env(safe-area-inset-bottom)); transform: translateX(-50%);
   background: var(--text); color: var(--bg); padding: 8px 14px; border-radius: 8px; font-size: 14px;
   opacity: 0; pointer-events: none; transition: opacity .2s; max-width: calc(100% - 32px);
+  display: flex; align-items: center; gap: 12px;
 }
-.toast.show { opacity: .95; }
+.toast.show { opacity: .95; pointer-events: auto; }
+.toast button { background: none; color: var(--bar); padding: 2px 4px; font-weight: 700; white-space: nowrap; }
